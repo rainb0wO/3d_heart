@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebAR流体粒子互动系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            overflow: hidden;
+            font-family: 'Microsoft YaHei', sans-serif;
+            background: #000;
+            cursor: none;
+        }
+
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+        }
+
+        #video-container {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 320px;
+            height: 240px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 10px;
+            overflow: hidden;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 100;
+            backdrop-filter: blur(10px);
+        }
+
+        #video-container::before {
+            content: '📹 摄像头画面';
+            position: absolute;
+            top: 5px;
+            left: 5px;
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 12px;
+            z-index: 101;
+            pointer-events: none;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+
+        #video {
+            width: 100%;
+            height: 100%;
+            transform: scaleX(-1);
+            object-fit: cover;
+        }
+
+        #status {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px 20px;
+            border-radius: 5px;
+            z-index: 100;
+            font-size: 14px;
+            backdrop-filter: blur(10px);
+        }
+
+        #image-viewer {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            max-width: 80vw;
+            max-height: 80vh;
+            z-index: 200;
+            display: none;
+            border: 3px solid white;
+            border-radius: 10px;
+            box-shadow: 0 0 50px rgba(255, 255, 255, 0.5);
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translate(-50%, -50%) scale(0.9); }
+            to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+        }
+
+        #image-viewer img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+
+        #close-btn {
+            position: absolute;
+            top: -15px;
+            right: -15px;
+            width: 30px;
+            height: 30px;
+            background: white;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 20px;
+            color: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+            transition: transform 0.2s;
+        }
+
+        #close-btn:hover {
+            transform: scale(1.1);
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 24px;
+            z-index: 300;
+        }
+
+        #fps {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 12px;
+            z-index: 100;
+        }
+
+        #upload-container {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            z-index: 100;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+        }
+
+        #upload-label {
+            display: inline-block;
+            padding: 8px 16px;
+            background: rgba(255, 107, 157, 0.8);
+            color: white;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+
+        #upload-label:hover {
+            background: rgba(255, 107, 157, 1);
+        }
+
+        #file-input {
+            display: none;
+        }
+
+        #upload-info {
+            margin-top: 10px;
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <div id="video-container">
+        <video id="video" autoplay playsinline></video>
+    </div>
+    <div id="status">正在初始化摄像头...</div>
+    <div id="fps">FPS: --</div>
+    <div id="upload-container">
+        <label for="file-input" id="upload-label">📸 上传图片</label>
+        <input type="file" id="file-input" accept="image/*" multiple>
+        <div id="upload-info">已上传 0 张图片</div>
+    </div>
+    <div id="image-viewer">
+        <img id="viewer-img" src="" alt="图片查看器">
+        <button id="close-btn">×</button>
+    </div>
+    <div id="loading">正在加载...</div>
+
+    <!-- 使用unpkg CDN -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // 全局变量
+        let uploadedImages = []; // 存储上传的图片对象URL和纹理
+        let scene, camera, renderer;
+        let video, hands;
+        let gestureState = 'normal';
+        let particleCount = 15000; // 10000+粒子
+        let imageTextures = [];
+        let imagesLoaded = 0;
+        
+        // 物理系统
+        let particles = []; // 粒子数据数组
+        let instancedMesh = null;
+        let lastTime = performance.now();
+        let frameCount = 0;
+        let fps = 0;
+
+        // 手势控制参数
+        let handPosition = { x: 0, y: 0, z: 0 };
+        let handVelocity = { x: 0, y: 0, z: 0 };
+        let rotationSpeed = { x: 0, y: 0 };
+        let gestureIntensity = 0; // 手势强度 0-1
+
+        // 初始化场景
+        function initScene() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000000);
+            scene.fog = new THREE.Fog(0x000000, 10, 50);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 8;
+
+            renderer = new THREE.WebGLRenderer({ 
+                antialias: true, 
+                alpha: true,
+                powerPreference: "high-performance"
+            });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setAnimationLoop(animate);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // 添加环境光
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+
+            // 添加点光源
+            const pointLight = new THREE.PointLight(0xff6b9d, 1, 100);
+            pointLight.position.set(0, 0, 10);
+            scene.add(pointLight);
+        }
+
+        // 从上传的文件创建纹理
+        function createTextureFromFile(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const texture = new THREE.Texture(img);
+                        texture.minFilter = THREE.LinearMipmapLinearFilter;
+                        texture.magFilter = THREE.LinearFilter;
+                        texture.generateMipmaps = true;
+                        texture.needsUpdate = true;
+                        resolve({ texture, objectURL: e.target.result, file });
+                    };
+                    img.onerror = reject;
+                    img.src = e.target.result;
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+        }
+
+        // 处理文件上传
+        async function handleFileUpload(files) {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('status').textContent = '正在处理上传的图片...';
+
+            try {
+                const fileArray = Array.from(files);
+                const promises = fileArray.map(file => createTextureFromFile(file));
+                const results = await Promise.all(promises);
+
+                // 清理旧的纹理和URL
+                uploadedImages.forEach(item => {
+                    if (item.objectURL) {
+                        URL.revokeObjectURL(item.objectURL);
+                    }
+                    if (item.texture) {
+                        item.texture.dispose();
+                    }
+                });
+
+                uploadedImages = results;
+                imageTextures = results.map(r => r.texture);
+
+                document.getElementById('upload-info').textContent = `已上传 ${uploadedImages.length} 张图片`;
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('status').textContent = '图片上传成功！正在创建粒子系统...';
+
+                // 重新创建粒子系统
+                if (instancedMesh) {
+                    scene.remove(instancedMesh);
+                    instancedMesh.geometry.dispose();
+                    instancedMesh.material.dispose();
+                    instancedMesh = null;
+                }
+                particles = [];
+                createParticleSystem();
+
+                document.getElementById('status').textContent = '粒子系统已更新，手势识别已就绪';
+            } catch (error) {
+                console.error('图片处理失败:', error);
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('status').textContent = '图片处理失败，请重试';
+            }
+        }
+
+        // 初始化图片加载（不再从文件路径加载）
+        function initImages() {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('status').textContent = '请上传图片以创建粒子系统';
+            // 如果没有上传图片，使用默认粒子
+            createParticleSystem();
+        }
+
+        // 创建粒子系统（使用BufferGeometry优化性能）
+        function createParticleSystem() {
+            // 创建缓冲区几何体
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(particleCount * 3);
+            const colors = new Float32Array(particleCount * 3);
+            const sizes = new Float32Array(particleCount);
+
+            // 随机选择纹理
+            const textures = imageTextures.length > 0 ? imageTextures : [];
+            const material = textures.length > 0 
+                ? new THREE.PointsMaterial({
+                    map: textures[Math.floor(Math.random() * textures.length)],
+                    size: 0.025,  // 更细腻的粒子大小
+                    transparent: true,
+                    opacity: 0.7,  // 稍微降低透明度，更柔和
+                    blending: THREE.AdditiveBlending,
+                    depthWrite: false,
+                    vertexColors: false,
+                    sizeAttenuation: true,
+                    alphaTest: 0.001  // 优化透明渲染
+                })
+                : new THREE.PointsMaterial({
+                    color: 0xff6b9d,
+                    size: 0.025,  // 更细腻的粒子大小
+                    transparent: true,
+                    opacity: 0.7,  // 稍微降低透明度，更柔和
+                    blending: THREE.AdditiveBlending,
+                    depthWrite: false,
+                    sizeAttenuation: true,
+                    alphaTest: 0.001  // 优化透明渲染
+                });
+
+            // 初始化粒子数据（包含位置、速度、加速度）
+            particles = [];
+            for (let i = 0; i < particleCount; i++) {
+                const i3 = i * 3;
+                const angle = Math.random() * Math.PI * 2;
+                const radius = Math.random() * 8 + 2;
+                const height = (Math.random() - 0.5) * 10;
+
+                const x = Math.cos(angle) * radius;
+                const y = height;
+                const z = Math.sin(angle) * radius;
+
+                positions[i3] = x;
+                positions[i3 + 1] = y;
+                positions[i3 + 2] = z;
+
+                // 随机颜色（如果使用默认材质）
+                colors[i3] = 1; // R
+                colors[i3 + 1] = 0.4 + Math.random() * 0.3; // G
+                colors[i3 + 2] = 0.6 + Math.random() * 0.3; // B
+
+                // 更细腻的粒子大小，减小变化范围
+                sizes[i] = 0.02 + Math.random() * 0.015;  // 0.02-0.035的细腻范围
+
+                particles.push({
+                    position: new THREE.Vector3(x, y, z),
+                    velocity: new THREE.Vector3(
+                        (Math.random() - 0.5) * 0.02,
+                        (Math.random() - 0.5) * 0.02,
+                        (Math.random() - 0.5) * 0.02
+                    ),
+                    acceleration: new THREE.Vector3(0, 0, 0),
+                    targetPosition: new THREE.Vector3(0, 0, 0),
+                    damping: 0.92 + Math.random() * 0.03, // 阻尼系数 0.92-0.95
+                    maxSpeed: 0.4 + Math.random() * 0.2, // 最大速度 0.4-0.6
+                    textureIndex: textures.length > 0 ? Math.floor(Math.random() * textures.length) : 0,
+                    size: sizes[i]
+                });
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+
+            // 创建Points对象
+            instancedMesh = new THREE.Points(geometry, material);
+            instancedMesh.frustumCulled = false;
+
+            scene.add(instancedMesh);
+        }
+
+        // 更新粒子位置缓冲区
+        function updateParticlePositions() {
+            if (!instancedMesh || !particles) return;
+            
+            const positions = instancedMesh.geometry.attributes.position.array;
+            
+            for (let i = 0; i < particles.length; i++) {
+                const i3 = i * 3;
+                const particle = particles[i];
+                positions[i3] = particle.position.x;
+                positions[i3 + 1] = particle.position.y;
+                positions[i3 + 2] = particle.position.z;
+            }
+            
+            instancedMesh.geometry.attributes.position.needsUpdate = true;
+        }
+
+        // 生成爱心形状的点（增大尺寸，减少随机性，让爱心更清晰）
+        function generateHeartShape(count) {
+            const points = [];
+            for (let i = 0; i < count; i++) {
+                const t = (i / count) * Math.PI * 2;
+                // 爱心参数方程
+                const x = 16 * Math.pow(Math.sin(t), 3);
+                const y = -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t));
+                // 增大爱心尺寸（从0.12改为0.25），减少随机偏移（从0.3改为0.1）
+                points.push(new THREE.Vector3(
+                    x * 0.25 + (Math.random() - 0.5) * 0.1,
+                    y * 0.25 + (Math.random() - 0.5) * 0.1,
+                    (Math.random() - 0.5) * 0.5  // 减少Z轴随机范围
+                ));
+            }
+            return points;
+        }
+
+        // 生成散开目标位置（烟花效果）
+        function generateScatterTargets(count) {
+            const targets = [];
+            for (let i = 0; i < count; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const phi = Math.random() * Math.PI;
+                const radius = 5 + Math.random() * 15;
+                targets.push(new THREE.Vector3(
+                    radius * Math.sin(phi) * Math.cos(angle),
+                    radius * Math.sin(phi) * Math.sin(angle),
+                    radius * Math.cos(phi)
+                ));
+            }
+            return targets;
+        }
+
+        // 更新粒子物理系统（速度+加速度模型）
+        function updateParticlePhysics(deltaTime) {
+            if (!particles || particles.length === 0) return;
+
+            let targetPositions = [];
+            let attractionStrength = 0;
+            let scatterTargets = [];
+
+            // 根据手势状态设置目标
+            if (gestureState === 'fist') {
+                // 握拳：聚拢成爱心（增强吸引力让爱心更快形成）
+                targetPositions = generateHeartShape(particleCount);
+                attractionStrength = 0.25;  // 从0.15增加到0.25，让粒子更快聚拢
+            } else if (gestureState === 'open') {
+                // 张开手掌：散开
+                scatterTargets = generateScatterTargets(particleCount);
+                attractionStrength = 0.1;
+            } else {
+                // 正常状态：围绕手部位置
+                attractionStrength = 0.05;
+            }
+
+            // 更新每个粒子的物理状态
+            for (let i = 0; i < particles.length; i++) {
+                const particle = particles[i];
+                let target = null;
+
+                // 确定目标位置
+                if (gestureState === 'fist' && targetPositions[i]) {
+                    target = targetPositions[i];
+                } else if (gestureState === 'open' && scatterTargets[i]) {
+                    target = scatterTargets[i];
+                } else {
+                    // 正常状态：围绕手部位置随机分布
+                    const angle = (i / particleCount) * Math.PI * 2;
+                    const radius = 3 + Math.random() * 3;
+                    target = new THREE.Vector3(
+                        handPosition.x + Math.cos(angle) * radius,
+                        handPosition.y + (Math.random() - 0.5) * 4,
+                        handPosition.z + Math.sin(angle) * radius
+                    );
+                }
+
+                if (target) {
+                    particle.targetPosition.copy(target);
+                }
+
+                // 计算指向目标的加速度（引力）
+                const direction = new THREE.Vector3()
+                    .subVectors(particle.targetPosition, particle.position)
+                    .multiplyScalar(attractionStrength);
+
+                // 添加手部位置的吸引力（如果手部在附近）
+                const handDirection = new THREE.Vector3()
+                    .subVectors(handPosition, particle.position);
+                const handDistance = handDirection.length();
+                if (handDistance < 5) {
+                    const handForce = handDirection.normalize().multiplyScalar(
+                        (5 - handDistance) * 0.01 * gestureIntensity
+                    );
+                    direction.add(handForce);
+                }
+
+                // 应用加速度到速度（物理模型：F = ma, v = v0 + a*dt）
+                particle.acceleration.copy(direction);
+                particle.velocity.add(
+                    particle.acceleration.clone().multiplyScalar(deltaTime * 60)
+                );
+
+                // 限制最大速度
+                const speed = particle.velocity.length();
+                if (speed > particle.maxSpeed) {
+                    particle.velocity.normalize().multiplyScalar(particle.maxSpeed);
+                }
+
+                // 应用速度到位置（使用固定时间步长确保物理一致性）
+                const timeStep = deltaTime * 60; // 转换为60fps的时间步长
+                particle.position.add(
+                    particle.velocity.clone().multiplyScalar(timeStep)
+                );
+
+                // 应用阻尼（模拟空气阻力）
+                particle.velocity.multiplyScalar(particle.damping);
+
+                // 边界处理（弹性碰撞）
+                const boundary = 20;
+                const bounce = 0.7;
+                if (Math.abs(particle.position.x) > boundary) {
+                    particle.position.x = Math.sign(particle.position.x) * boundary;
+                    particle.velocity.x *= -bounce;
+                }
+                if (Math.abs(particle.position.y) > boundary) {
+                    particle.position.y = Math.sign(particle.position.y) * boundary;
+                    particle.velocity.y *= -bounce;
+                }
+                if (Math.abs(particle.position.z) > boundary) {
+                    particle.position.z = Math.sign(particle.position.z) * boundary;
+                    particle.velocity.z *= -bounce;
+                }
+            }
+
+            updateParticlePositions();
+        }
+
+        // 应用旋转（旋转整个粒子系统）
+        function applyRotation(deltaTime) {
+            if (!instancedMesh) return;
+
+            // 平滑旋转插值
+            const rotationDamping = 0.9;
+            if (Math.abs(rotationSpeed.x) > 0.001 || Math.abs(rotationSpeed.y) > 0.001) {
+                instancedMesh.rotation.y += rotationSpeed.y * deltaTime * 60;
+                instancedMesh.rotation.x += rotationSpeed.x * deltaTime * 60;
+            } else {
+                // 当没有手势时，逐渐减速
+                instancedMesh.rotation.y *= rotationDamping;
+                instancedMesh.rotation.x *= rotationDamping;
+            }
+
+            // 自然缓慢旋转
+            instancedMesh.rotation.z += 0.05 * deltaTime;
+        }
+
+        // 初始化MediaPipe Hands
+        async function initMediaPipe() {
+            return new Promise((resolve, reject) => {
+                const mpScript = document.createElement('script');
+                mpScript.src = 'https://unpkg.com/@mediapipe/hands@0.4.1675469404/hands.js';
+                mpScript.onload = () => {
+                    const cameraScript = document.createElement('script');
+                    cameraScript.src = 'https://unpkg.com/@mediapipe/camera_utils@0.3.1675466864/camera_utils.js';
+                    cameraScript.onload = resolve;
+                    cameraScript.onerror = reject;
+                    document.head.appendChild(cameraScript);
+                };
+                mpScript.onerror = reject;
+                document.head.appendChild(mpScript);
+            });
+        }
+
+        // 设置摄像头和手势识别
+        async function setupCamera() {
+            video = document.getElementById('video');
+            
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        width: 640,
+                        height: 480,
+                        facingMode: 'user'
+                    }
+                });
+                video.srcObject = stream;
+                video.onloadedmetadata = async () => {
+                    document.getElementById('status').textContent = '正在加载手势识别模型...';
+                    
+                    try {
+                        hands = new Hands({
+                            locateFile: (file) => {
+                                return `https://unpkg.com/@mediapipe/hands@0.4.1675469404/${file}`;
+                            }
+                        });
+                        
+                        hands.setOptions({
+                            maxNumHands: 1,
+                            modelComplexity: 1,
+                            minDetectionConfidence: 0.7,
+                            minTrackingConfidence: 0.7
+                        });
+
+                        hands.onResults(onHandResults);
+                        
+                        const camera = new Camera(video, {
+                            onFrame: async () => {
+                                await hands.send({ image: video });
+                            },
+                            width: 640,
+                            height: 480
+                        });
+                        camera.start();
+                        
+                        document.getElementById('status').textContent = '摄像头已启动，手势识别已就绪';
+                    } catch (error) {
+                        console.error('MediaPipe初始化失败:', error);
+                        document.getElementById('status').textContent = '手势识别初始化失败: ' + error.message;
+                    }
+                };
+            } catch (error) {
+                console.error('摄像头访问失败:', error);
+                document.getElementById('status').textContent = '无法访问摄像头，请检查权限';
+            }
+        }
+
+        // 处理MediaPipe手势识别结果
+        function onHandResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                detectGestureFromLandmarks(landmarks);
+                updateHandTracking(landmarks);
+            } else {
+                gestureState = 'normal';
+                gestureIntensity = 0;
+                rotationSpeed = { x: 0, y: 0 };
+                handVelocity = { x: 0, y: 0, z: 0 };
+                document.getElementById('status').textContent = '手势：未检测到手';
+            }
+        }
+
+        // 更新手部追踪
+        function updateHandTracking(landmarks) {
+            const wrist = landmarks[0];
+            const indexTip = landmarks[8];
+            
+            // 平滑手部位置（减少抖动）
+            const newHandPos = {
+                x: (wrist.x - 0.5) * 20,
+                y: -(wrist.y - 0.5) * 15,
+                z: (wrist.z - 0.5) * 10
+            };
+
+            // 使用插值实现平滑移动
+            handPosition.x += (newHandPos.x - handPosition.x) * 0.2;
+            handPosition.y += (newHandPos.y - handPosition.y) * 0.2;
+            handPosition.z += (newHandPos.z - handPosition.z) * 0.2;
+
+            // 计算手部速度（用于物理反馈）
+            handVelocity.x = newHandPos.x - handPosition.x;
+            handVelocity.y = newHandPos.y - handPosition.y;
+            handVelocity.z = newHandPos.z - handPosition.z;
+
+            // 更新旋转速度（基于食指位置）
+            const normalizedX = (indexTip.x - 0.5) * 2;
+            const normalizedY = (indexTip.y - 0.5) * 2;
+            
+            const distanceToEdge = Math.min(
+                Math.abs(1 - Math.abs(normalizedX)),
+                Math.abs(1 - Math.abs(normalizedY))
+            );
+            
+            const speedMultiplier = 1 + (1 - distanceToEdge) * 3; // 1x 到 4x
+            
+            rotationSpeed.y = normalizedX * 0.015 * speedMultiplier;
+            rotationSpeed.x = -normalizedY * 0.015 * speedMultiplier;
+        }
+
+        // 检测手势（MediaPipe格式）
+        function detectGestureFromLandmarks(landmarks) {
+            const thumbTip = landmarks[4];
+            const thumbIP = landmarks[3];
+            const indexTip = landmarks[8];
+            const indexPIP = landmarks[6];
+            const middleTip = landmarks[12];
+            const middlePIP = landmarks[10];
+            const ringTip = landmarks[16];
+            const ringPIP = landmarks[14];
+            const pinkyTip = landmarks[20];
+            const pinkyPIP = landmarks[18];
+            const wrist = landmarks[0];
+
+            // 计算手指是否伸出
+            const thumbExtended = thumbTip.y < thumbIP.y;
+            const indexExtended = indexTip.y < indexPIP.y;
+            const middleExtended = middleTip.y < middlePIP.y;
+            const ringExtended = ringTip.y < ringPIP.y;
+            const pinkyExtended = pinkyTip.y < pinkyPIP.y;
+
+            const extendedFingers = [thumbExtended, indexExtended, middleExtended, ringExtended, pinkyExtended].filter(Boolean).length;
+
+            // 检测指向
+            const pointing = indexExtended && !middleExtended && !ringExtended && !pinkyExtended;
+            const pointingForward = pointing && indexTip.z < wrist.z - 0.05;
+
+            // 检测手势强度（基于手指的张开程度）
+            const fingerSpacing = Math.sqrt(
+                Math.pow(indexTip.x - middleTip.x, 2) +
+                Math.pow(indexTip.y - middleTip.y, 2)
+            );
+            gestureIntensity = Math.min(1, fingerSpacing * 10);
+
+            let newGestureState = gestureState;
+
+            if (pointingForward) {
+                newGestureState = 'point';
+            } else if (extendedFingers === 0 || extendedFingers === 1) {
+                newGestureState = 'fist';
+                gestureIntensity = 1;
+            } else if (extendedFingers >= 4) {
+                newGestureState = 'open';
+                gestureIntensity = Math.max(0.5, gestureIntensity);
+            } else {
+                newGestureState = 'normal';
+            }
+
+            if (newGestureState !== gestureState) {
+                gestureState = newGestureState;
+                if (gestureState === 'point') {
+                    showRandomImage();
+                }
+            }
+
+            // 更新状态显示
+            const statusText = {
+                'fist': '手势：握拳 - 粒子聚拢成爱心',
+                'open': '手势：张开手掌 - 粒子散开',
+                'point': '手势：指向屏幕 - 显示图片',
+                'normal': '手势：正常'
+            };
+            document.getElementById('status').textContent = statusText[gestureState] || '手势：正常';
+        }
+
+        // 随机显示图片
+        function showRandomImage() {
+            if (uploadedImages.length === 0) return;
+            const randomIndex = Math.floor(Math.random() * uploadedImages.length);
+            const img = document.getElementById('viewer-img');
+            const viewer = document.getElementById('image-viewer');
+            
+            img.src = uploadedImages[randomIndex].objectURL;
+            viewer.style.display = 'block';
+            
+            setTimeout(() => {
+                viewer.style.display = 'none';
+            }, 5000);
+        }
+
+        // 关闭图片查看器
+        document.getElementById('close-btn').addEventListener('click', () => {
+            document.getElementById('image-viewer').style.display = 'none';
+        });
+
+        // 动画循环
+        function animate(currentTime) {
+            const deltaTime = (currentTime - lastTime) / 1000;
+            lastTime = currentTime;
+
+            // 计算FPS
+            frameCount++;
+            if (frameCount % 60 === 0) {
+                fps = Math.round(1 / deltaTime);
+                document.getElementById('fps').textContent = `FPS: ${fps} | 粒子数: ${particleCount}`;
+            }
+
+            // 更新物理系统
+            updateParticlePhysics(deltaTime);
+            
+            // 应用旋转
+            applyRotation(deltaTime);
+
+            // 渲染
+            renderer.render(scene, camera);
+        }
+
+        // 窗口大小调整
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // 文件上传事件处理
+        document.getElementById('file-input').addEventListener('change', (e) => {
+            const files = e.target.files;
+            if (files.length > 0) {
+                handleFileUpload(files);
+            }
+        });
+
+        // 页面关闭时清理资源并重置状态
+        function cleanupAndReset() {
+            // 清理所有纹理（data URL不需要revoke，会随页面关闭自动清理）
+            uploadedImages.forEach(item => {
+                if (item.texture) {
+                    item.texture.dispose();
+                }
+            });
+            uploadedImages = [];
+            imageTextures = [];
+
+            // 清理粒子系统
+            if (instancedMesh) {
+                scene.remove(instancedMesh);
+                instancedMesh.geometry.dispose();
+                instancedMesh.material.dispose();
+                instancedMesh = null;
+            }
+            particles = [];
+
+            // 重置状态
+            gestureState = 'normal';
+            handPosition = { x: 0, y: 0, z: 0 };
+            handVelocity = { x: 0, y: 0, z: 0 };
+            rotationSpeed = { x: 0, y: 0 };
+            gestureIntensity = 0;
+
+            // 清理渲染器
+            if (renderer) {
+                renderer.dispose();
+            }
+
+            // 停止摄像头
+            if (video && video.srcObject) {
+                const tracks = video.srcObject.getTracks();
+                tracks.forEach(track => track.stop());
+                video.srcObject = null;
+            }
+        }
+
+        // 监听页面关闭事件
+        window.addEventListener('beforeunload', cleanupAndReset);
+
+        // 也监听页面隐藏事件（某些移动浏览器）
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') {
+                // 可选：在页面隐藏时也清理（根据需要）
+            }
+        });
+
+        // 初始化
+        async function init() {
+            initScene();
+            initImages(); // 不再加载文件路径图片
+            await initMediaPipe();
+            await setupCamera();
+        }
+
+        // 启动
+        init();
+    </script>
+</body>
+</html>
