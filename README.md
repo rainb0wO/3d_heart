@@ -119,7 +119,3 @@ python -m SimpleHTTPServer 8000
 - 确保图片文件名正确
 - 查看浏览器控制台的错误信息
 
-## 许可证
-
-MIT License
-
