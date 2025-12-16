@@ -578,11 +578,20 @@
             });
         }
 
-        // 设置摄像头和手势识别
+        // 设置摄像头和手势识别（隐藏画面，仅用于识别）
         async function setupCamera() {
+            const statusEl = document.getElementById('status');
             video = document.getElementById('video');
-            
+
+            // 1. 先检查浏览器是否支持
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                statusEl.textContent = '当前浏览器不支持摄像头访问，请在系统浏览器（Safari / Chrome）中打开';
+                return;
+            }
+
             try {
+                statusEl.textContent = '正在请求摄像头权限，请在弹框中选择允许';
+
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: {
                         width: 640,
@@ -590,9 +599,11 @@
                         facingMode: 'user'
                     }
                 });
+
+                // 如果用户之前点过“禁止”，这里会直接抛异常，不会走到下面
                 video.srcObject = stream;
                 video.onloadedmetadata = async () => {
-                    document.getElementById('status').textContent = '正在加载手势识别模型...';
+                    statusEl.textContent = '正在加载手势识别模型...';
                     
                     try {
                         hands = new Hands({
@@ -619,15 +630,27 @@
                         });
                         camera.start();
                         
-                        document.getElementById('status').textContent = '摄像头已启动，手势识别已就绪';
+                        statusEl.textContent = '摄像头已启动，手势识别已就绪';
                     } catch (error) {
                         console.error('MediaPipe初始化失败:', error);
-                        document.getElementById('status').textContent = '手势识别初始化失败: ' + error.message;
+                        statusEl.textContent = '手势识别初始化失败: ' + error.message;
                     }
                 };
             } catch (error) {
                 console.error('摄像头访问失败:', error);
-                document.getElementById('status').textContent = '无法访问摄像头，请检查权限';
+
+                // 针对不同错误给出更清晰提示
+                if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                    statusEl.textContent = '摄像头权限被拒绝，请在浏览器设置中为本网站开启摄像头权限后刷新页面';
+                } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+                    statusEl.textContent = '未找到可用摄像头，请检查设备是否有摄像头或未被其他应用占用';
+                } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+                    statusEl.textContent = '摄像头被其他应用占用，请关闭其他使用摄像头的应用后重试';
+                } else if (error.name === 'SecurityError') {
+                    statusEl.textContent = '安全策略禁止访问摄像头，请确认使用的是 HTTPS 并在系统浏览器中打开';
+                } else {
+                    statusEl.textContent = '无法访问摄像头：' + error.message;
+                }
             }
         }
 
