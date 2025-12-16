@@ -24,39 +24,9 @@
             position: relative;
         }
 
-        #video-container {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            width: 320px;
-            height: 240px;
-            border: 2px solid rgba(255, 255, 255, 0.3);
-            border-radius: 10px;
-            overflow: hidden;
-            background: rgba(0, 0, 0, 0.5);
-            z-index: 100;
-            backdrop-filter: blur(10px);
-        }
-
-        #video-container::before {
-            content: '📹 摄像头画面';
-            position: absolute;
-            top: 5px;
-            left: 5px;
-            color: rgba(255, 255, 255, 0.7);
-            font-size: 12px;
-            z-index: 101;
-            pointer-events: none;
-            background: rgba(0, 0, 0, 0.3);
-            padding: 2px 6px;
-            border-radius: 3px;
-        }
-
+        /* 隐藏摄像头视频元素，仅用于手势识别计算，不展示画面 */
         #video {
-            width: 100%;
-            height: 100%;
-            transform: scaleX(-1);
-            object-fit: cover;
+            display: none;
         }
 
         #status {
@@ -180,10 +150,9 @@
 </head>
 <body>
     <div id="canvas-container"></div>
-    <div id="video-container">
-        <video id="video" autoplay playsinline></video>
-    </div>
-    <div id="status">正在初始化摄像头...</div>
+    <!-- 隐藏的视频元素，仅用于手势识别 -->
+    <video id="video" autoplay playsinline></video>
+    <div id="status">正在初始化粒子系统和手势识别...</div>
     <div id="fps">FPS: --</div>
     <div id="upload-container">
         <label for="file-input" id="upload-label">📸 上传图片</label>
@@ -886,10 +855,11 @@
             }
         });
 
-        // 初始化
+        // 初始化（启用摄像头与手势识别，但不展示画面）
         async function init() {
             initScene();
             initImages(); // 不再加载文件路径图片
+            document.getElementById('status').textContent = '正在加载手势识别模型...';
             await initMediaPipe();
             await setupCamera();
         }
